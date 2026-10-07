@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale = 1.0">
+
+    <title>Heart Desease Pridiction</title>
+    <link rel = "stylesheet" href="{{url_for('static', filename = 'style.css')}}">
+</head>
+<body>
+    <div class="container">
+        <h1>Heart Disease Prediction</h1>
+        <form action = "/prediction" method = "POST" id = "prediction-form">
+            <fieldset>
+                <legend>Patient Information</legend>
+                <label for ="age">Age:</label>
+                <div class="tooltip">
+                <input type="number" id ="age" name="age" min="20" max="80" required aria-label ="Patient Age">
+                <span class="tooltiptext">Age in years</span>
+                </div>
+
+                <label for ="sex">Sex:</label>
+                <div class="tooltip">
+                    <select id="sex" name="sex" required aria-label="Patient Sex">
+                        <option value="1">Male</option>
+                        <option value="0">Female</option>
+                    </select>
+                    <span class="tooltiptext">Gender</span>
+                </div>
+
+                <label for="cp">CP</label>
+                <div class="tooltip">
+                    <select id="cp" name="cp" required aria-label="Chest Pain Type">
+                        <option value="0">Typical Angina</option>
+                        <option value="1">Atypical Angina</option>
+                        <option value="2">Non-Anginal Pain</option>
+                        <option value="3">Asyptomatic</option>
+                    </select>
+                    <span class="tooltiptext">Chest Pain Type</span>
+                </div>
+
+                <label for="trestbps">BP:</label>
+                <div class="tooltip">
+                    <input type="number" name="trestbps" id="trestbps" min="90" max="200" required aria-label="Resting Blood Pressure">
+                    <span class="tooltiptext">Resting Blood Pressure (mmHg)</span>
+                </div>
+
+                <label for="chol">Chol</label>
+                <div class="tooltip">
+                    <input type="number" id="chol" name="chol" min="100" max="600" required aria-label="Cholesterol Level">
+                    <span class="tooltiptext">Cholestrol level (mg/dl)</span>
+                </div>
+
+                <label for="fbs">FBS</label>
+                <div class="tooltip">
+                    <select id="fbs" name="fbs" required aria-label="Fasting Blood Sugar">
+                        <option value="1">Yes</option>
+                        <option value="0">No</option>
+                    </select>
+                    <span class="tooltiptext">Fasting Blood Sugar > 120 (mg/dl)</span>
+                </div>
+
+                <label for="thalach">THALACH:</label>
+                <div class="tooltip">
+                    <input type="number" step="0.1" id="thalach" name="thalach" min="70" max="200" required aria-label="Maximum Heart Rate">
+                    <span class="tooltiptext">Maximum heart rate achived</span>
+
+                </div>
+
+                <label for="oldpeak">Oldpeak:</label>
+                <div class="tooltip">
+                    <input type="number" step="0.1" id="oldpeak" name="oldpeak" min="0" max="6" required aria-label="ST Depression">
+                    <span class="tooltiptext">ST Depression</span>
+                </div>
+
+
+                <label for="restecg">ECG:</label>
+                <div class="tooltip">
+                    <select id="restecg" name="restecg" required aria-label="Resting ECG">
+                        <option value="0">Normal</option>
+                        <option value="1">Abnormal</option>
+                    </select>
+                    <span class="tooltiptext">Resting ECG</span>
+                </div>
+
+                <label for="exang">EXANG:</label>
+                <div class="tooltip">
+                    <select id="exang" name="exang" required aria-label="Exercise-Induce Angina">
+                        <option value="1">Yes</option>
+                        <option value="0">No</option>
+                    </select>
+                    <span class="tooltiptext">Exercise induced angina</span>
+                </div>
+
+                <label for="slope">Slope:</label>
+                <div class="tooltip">
+                    <select id="slope" name="slope" required aria-label="Slope of Peak Exercise ST Segment">
+                        <option value="0">Upsloping</option>
+                        <option value="1">Flat</option>
+                        <option value="2">Downsloping</option>
+                    </select>
+                    <span class="tooltiptext">Slope of Peak Exercise ST Segment:</span>
+                </div>
+                <label for="ca">Fluoroscopy Result:</label>
+                <div class="tooltip">
+                    <select id="ca" name="ca" required aria-label="Number of Major Vessels Colored by Fluotoscopy">
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                    <span class="tooltiptext">Number of major vessels colored by Fluoroscopy</span>
+                </div>
+
+
+                <label for="thal">Thalassemia Type:</label>
+                <div class="tooltip">
+                    <select id="thal" name="thal" required aria-label="Thalassemia Type">
+                        <option value="1">Normal</option>
+                        <option value="2">Fixed defect</option>
+                        <option value="3">Reversible defect</option>
+                    </select>
+                        <span class="tooltiptext">Thalassemia is a blood disorder. Normal indicates no defect.</span>
+                </div>
+
+            </fieldset>
+            <button type="submit">Predict</button>
+        </form>
+        {% if result %}
+        <div class="result">
+            <h2>Prediction Result:</h2>
+            <p>{{result}}</p>
+            <p>Probability of Heart Disease: {{probability}}</p>
+        </div>
+
+        {% endif %}
+
+        {% if error %}
+        <div class="error">
+            <p>Error: {{error}}</p>
+        </div>
+        {% endif %}
+
+        </div>
+
+        <script>
+            document.getElementById('prediction-form').addEventListener('input', function(e){
+            const target =e.target;
+            //age valication
+            if(target.id == 'age'){
+                if(target.value<20 || target.value>80){
+                    target.setCustomValidity('Age must be between 20 and 80');
+                } else{
+                    target.setCustomValidity('');
+                }
+            }
+
+            if(target.id == 'oldpeak'){
+                if(target.value<0 || target.value>6){
+                    target.setCustomValidity('ST Depression must be between 0 and 6');
+                } else{
+                    target.setCustomValidity('');
+                }
+            }
+            });
+        </script>
+
+</body>
+</html>
