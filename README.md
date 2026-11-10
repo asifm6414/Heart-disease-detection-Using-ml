@@ -1,98 +1,113 @@
-# Heart Disease Detection Using Machine Learning
+# Heart Disease Detection — CardioLens Demo
 
-I built this project as a learning-focused machine-learning application that explores how patient health measurements can be used to estimate the likelihood of heart disease. It includes scripts for preparing data and training models, plus a Flask web app for entering patient information and viewing a prediction.
+I built this repository as an educational machine-learning project. It includes a Flask web interface that applies a saved scaler and classifier to sample heart-health measurements.
 
-> **Important:** This project is for educational and demonstration purposes only. It is not a medical device and must not be used to diagnose, treat, or rule out heart disease. Please consult a qualified healthcare professional for medical advice.
+> **Safety notice:** This is a learning demo, not a medical device or clinical decision-support system. It has not been validated for diagnosis, screening, treatment, or patient care. Its output and probability must not guide medical decisions. Do not enter real or identifiable health information. Consult a qualified healthcare professional for health concerns; contact local emergency services for emergencies.
 
-## Project structure
+## What is included
+
+- Flask app with server-side input validation, CSRF protection, security response headers, and readiness/liveness endpoints.
+- Logistic regression model and scaler artifacts expected at `trained_model.pkl` and `scaler.pkl`.
+- Responsive web form served from Flask's `templates/` and `static/` directories.
+- Training and model exploration scripts for the included Excel dataset.
+- Docker and Render configuration for an example web deployment.
+
+The web app does **not** persist submitted values or predictions. Application logs should also never be configured to include request bodies or health form values.
+
+## Repository structure
 
 ```text
-Heart-disease-detection-Using-ml/
-├── .github/                          # GitHub repository configuration
-├── AllModelsTraining.py               # Train and evaluate multiple classifiers
-├── Data_Spliting.py                   # Split the Excel data and compare classifiers
-├── Heart_disease_cleveland_new.xlsx    # Dataset used by the training scripts
-├── app.py                             # Flask application and prediction/database logic
-├── index.html                         # Web form template (see Flask note below)
-├── logistic_regression_model.pkl      # Saved model artifact
-├── scaler.pkl                         # Saved feature scaler
-├── style.css                          # Web app stylesheet (see Flask note below)
-├── trainmodel.py                      # Train and save the logistic regression model
-└── trained_model.pkl                  # Saved model used by the Flask app
+.
+├── app.py
+├── templates/index.html
+├── static/style.css
+├── requirements.txt
+├── Dockerfile
+├── render.yaml
+├── trainmodel.py
+├── Data_Spliting.py
+├── AllModelsTraining.py
+├── Heart_disease_cleveland_new.xlsx
+├── trained_model.pkl
+└── scaler.pkl
 ```
 
-The Flask app also creates `heart_disease.db` locally to store submitted patient data, predictions, and errors. The database is generated at runtime and is not included in the repository.
+Root-level `index.html` and `style.css` are legacy copies from the original project; the running Flask app uses `templates/index.html` and `static/style.css`.
 
-## What the project does
+## Run locally
 
-- Loads heart-disease data from an Excel workbook.
-- Splits data into training and test sets and scales input features.
-- Trains a logistic regression model; a separate script also compares logistic regression, random forest, and support vector machine models.
-- Runs a Flask web interface that accepts patient measurements and returns a model prediction and probability.
-- Records submitted values and prediction results in a local SQLite database.
-
-## Requirements
-
-- Python 3.9 or newer
-- pip
-
-Install the Python packages used by the project:
+Requires Python 3.11 and pip.
 
 ```bash
-python -m pip install Flask pandas numpy scikit-learn joblib openpyxl
+git clone https://github.com/asifm6414/Heart-disease-detection-Using-ml.git
+cd Heart-disease-detection-Using-ml
+python3.11 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-## Setup and run
+Set a local secret and run with Flask's development server:
 
-1. Clone the repository and enter its directory:
+```bash
+# macOS/Linux
+export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+export APP_ENV=development
+flask --app app run
+```
 
-   ```bash
-   git clone https://github.com/asifm6414/Heart-disease-detection-Using-ml.git
-   cd Heart-disease-detection-Using-ml
-   ```
+```powershell
+# Windows PowerShell
+$env:SECRET_KEY = python -c "import secrets; print(secrets.token_hex(32))"
+$env:APP_ENV = "development"
+flask --app app run
+```
 
-2. Install the requirements shown above.
+Browse to `http://127.0.0.1:5000`. The development server is for local use only. Production is served through Gunicorn or the container configuration.
 
-3. **Set up Flask's template and static folders.** Flask looks for the HTML template in `templates/` and static files in `static/`, but these files are currently at the repository root. Create the folders and move the files:
+## Deploy with Docker
 
-   ```bash
-   mkdir -p templates static
-   mv index.html templates/index.html
-   mv style.css static/style.css
-   ```
+Build and run locally:
 
-4. Start the application:
+```bash
+docker build -t cardiolens .
+docker run --rm -p 8000:8000 \
+  -e APP_ENV=production \
+  -e SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')" \
+  cardiolens
+```
 
-   ```bash
-   python app.py
-   ```
+The service listens on port 8000. For a real deployment, provide the secret through your hosting provider's secret manager—never commit it or put it in an image. Terminate HTTPS at a trusted hosting proxy/load balancer and use a managed platform with health checks, monitoring, backups for any separately added data, and an incident-response plan.
 
-5. Open the local address printed by Flask (typically `http://127.0.0.1:5000`) in your browser.
+## Deploy to Render
 
-The app loads `trained_model.pkl` and `scaler.pkl` when it starts. If you need to regenerate them, run:
+The included `render.yaml` is a starting point for a Render Blueprint deployment. Connect the repository in Render and deploy the Blueprint; Render generates `SECRET_KEY`. Confirm the Python version, service plan, health check, and current platform settings in the Render dashboard before launching. The web service is stateless and does not require persistent disks for the included app.
+
+The configuration is a deployment example, not a guarantee of uptime, security compliance, clinical readiness, or suitability for handling protected health information.
+
+## Model artifacts and training
+
+The app loads the classifier and scaler at startup. By default, it expects `trained_model.pkl` and `scaler.pkl` beside `app.py`. You can override these paths with `MODEL_PATH` and `SCALER_PATH`.
+
+To regenerate the artifacts from the workbook:
 
 ```bash
 python trainmodel.py
 ```
 
-The training script reads `Heart_disease_cleveland_new.xlsx` from the current directory and saves updated model artifacts there.
+The training script writes the two artifacts into the current working directory. Retrain and validate the artifacts in the same pinned Python/scikit-learn environment used for deployment. Pickle/joblib files can execute code when loaded: only load artifacts from a trusted source, and keep the training and serving dependency versions compatible. The model's input feature names and order must match the application schema in `app.py`.
 
-## Training and evaluation scripts
+The older `Data_Spliting.py` and `AllModelsTraining.py` scripts are research/experimentation utilities and may need path or code fixes before use; they are not part of the production web startup process.
 
-- `trainmodel.py` trains a logistic regression classifier, saves `trained_model.pkl` and `scaler.pkl`, and prints evaluation metrics.
-- `Data_Spliting.py` creates train/test Excel files under `Train_data/` and `Test_data/` and compares several classifiers.
-- `AllModelsTraining.py` is an additional script for training and evaluating multiple classifiers. Check its expected input file locations before running it; its paths may need to match the output produced by the data-splitting script.
+## Health endpoints
 
-Model scores depend on the dataset, split, and training configuration. I have not included fixed performance claims here; run the scripts to see the metrics produced in your environment.
+- `GET /health/live` — process liveness.
+- `GET /health/ready` — reports readiness after model artifacts load successfully.
 
-## Input features
+## Production-readiness limitations
 
-The web form collects age, sex, chest-pain category, resting blood pressure, cholesterol, fasting blood sugar, resting ECG, maximum heart rate, exercise-induced angina, ST depression (`oldpeak`), ST-segment slope, number of major vessels (`ca`), and thalassemia category (`thal`). These values must use the same feature definitions and encoding expected by the dataset and saved model.
-
-## Data and privacy
-
-The app stores submitted patient measurements and prediction records in a local SQLite database. Do not enter real or identifiable health information into this demo. If adapting the project for any real-world use, review privacy, security, clinical validation, and applicable regulatory requirements first.
+This work hardens the software delivery path, but it does not make the prediction model fit for real-world medical use. Before any clinical or patient-facing use, this project would need, at minimum, independent clinical validation, calibration and subgroup/fairness analysis, documented data provenance and consent, privacy/security and regulatory review, an appropriate clinical safety process, accessibility review, and qualified clinical oversight. The dataset, model, input encoding, and displayed probability must be evaluated by domain experts. Do not use this deployment for real patient care or protected health information.
 
 ## License
 
-No license is currently specified for this repository. Please contact the repository owner before reusing or distributing the project.
+No license is currently specified. Contact the repository owner before reuse or redistribution.

@@ -1,170 +1,216 @@
-import datetime
+"""Flask web application for an educational heart-disease ML demo.
+
+This application is not a medical device and must not be used for clinical decisions.
+"""
+
+from __future__ import annotations
+
+import logging
 import os
-import pandas as pd
-import sqlite3
-import numpy as np
+from pathlib import Path
+from typing import Any
+
 import joblib
+import pandas as pd
 from flask import Flask, render_template, request
+from flask_wtf.csrf import CSRFError, CSRFProtect
+from werkzeug.exceptions import BadRequest
 
-# Load the trainedd model
-try:
-    model = joblib.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trained_model.pkl'))
-    scaler = joblib.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scaler.pkl'))
-except FileNotFoundError as e:
-    print(f"Error loading model or scaler: {e}")
-    exit(1)
-# initialization of Flassk app
-app = Flask(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+FEATURES = (
+    "age",
+    "sex",
+    "cp",
+    "trestbps",
+    "chol",
+    "fbs",
+    "restecg",
+    "thalach",
+    "exang",
+    "oldpeak",
+    "slope",
+    "ca",
+    "thal",
+)
+
+# Bounds/allowed encoded values are input-quality checks, not medical guidance.
+INTEGER_FIELDS = {
+    "age": (20, 100),
+    "sex": (0, 1),
+    "cp": (0, 3),
+    "trestbps": (50, 300),
+    "chol": (50, 800),
+    "fbs": (0, 1),
+    "restecg": (0, 2),
+    "thalach": (40, 250),
+    "exang": (0, 1),
+    "slope": (0, 2),
+    "ca": (0, 3),
+    "thal": (1, 3),
+}
+
+csrf = CSRFProtect()
 
 
-# Function to connect to the SQLite database
-def get_db_connection():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'heart_disease.db')
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row  # For accessing columns by name
-    return conn
-
-
-# Function to initialize the database
-def init_db():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Patients(
-        patient_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        age INTEGER NOT NULL,
-        sex INTEGER NOT NULL,
-        cp INTEGER NOT NULL,
-        trestbps INTEGER NOT NULL,
-        chol INTEGER NOT NULL,
-        fbs INTEGER NOT NULL,
-        restecg INTEGER NOT NULL,
-        thalach INTEGER NOT NULL,
-        exang INTEGER NOT NULL,
-        oldpeak REAL NOT NULL,
-        slope INTEGER NOT NULL,
-        ca INTEGER NOT NULL,
-        thal INTEGER NOT NULL
+def _load_artifacts() -> tuple[Any, Any]:
+    model_path = Path(os.environ.get("MODEL_PATH", BASE_DIR / "trained_model.pkl"))
+    scaler_path = Path(os.environ.get("SCALER_PATH", BASE_DIR / "scaler.pkl"))
+    if not model_path.is_file() or not scaler_path.is_file():
+        raise RuntimeError(
+            "Required model artifacts are missing. Provide trained_model.pkl and scaler.pkl, "
+            "or set MODEL_PATH and SCALER_PATH."
         )
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Predictions(
-        prediction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        patient_id INTEGER NOT NULL,
-        prediction_result TEXT NOT NULL,
-        confidence_score REAL NOT NULL,
-        timestamp DATETIME NOT NULL,
-        FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
-
-        )
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Errors(
-        error_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        error_message TEXT NOT NULL,
-        timestamp DATETIME NOT NULL
-        )
-        """)
-        conn.commit()
-
-
-# call the initialization function when the app starts
-init_db()
-
-
-# Home page route
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-
-@app.route('/prediction', methods=['POST'])
-def predict():
     try:
-        # data collection form
-        age = int(request.form['age'])
-        sex = int(request.form['sex'])
-        cp = int(request.form['cp'])
-        trestbps = int(request.form['trestbps'])
-        chol = int(request.form['chol'])
-        fbs = int(request.form['fbs'])
-        restecg = int(request.form.get('restecg', 0))
-        thalach = int(request.form['thalach'])
-        exang = int(request.form.get('exang', 0))
-        oldpeak = float(request.form['oldpeak'])
-        slope = int(request.form.get('slope', 0))
-        ca = int(request.form.get('ca', 0))
-        thal = int(request.form.get('thal', 0))
+        # Only load trusted artifacts created and controlled by this project.
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+    except Exception as exc:
+        raise RuntimeError("Could not load the configured model artifacts.") from exc
 
-        # For DataFrame and preprocess
-        input_data = pd.DataFrame({
-            'age': [age],
-            'sex': [sex],
-            'cp': [cp],
-            'trestbps': [trestbps],
-            'chol': [chol],
-            'fbs': [fbs],
-            'restecg': [restecg],
-            'thalach': [thalach],
-            'exang': [exang],
-            'oldpeak': [oldpeak],
-            'slope': [slope],
-            'ca': [ca],
-            'thal': [thal]
-        })
+    for artifact, label in ((model, "model"), (scaler, "scaler")):
+        names = getattr(artifact, "feature_names_in_", None)
+        if names is not None and tuple(names) != FEATURES:
+            raise RuntimeError(
+                f"The {label} feature order does not match the application input schema. "
+                "Retrain artifacts with the feature order documented in app.py."
+            )
+    return model, scaler
 
-        # Validate features
-        if hasattr(model, 'feature_name_in_'):
-            missing = set(model.feature_names_in_) - set(input_data.columns)
-            if missing:
-                raise ValueError(f"Missing required features: {missing}")
 
-        # input data scalling
-        input_data_scaled = scaler.transform(input_data)
-
-        # prediction
-        prediction = model.predict(input_data_scaled)[0]
-        probability = model.predict_proba(input_data_scaled)[0][1] * 100
-
-        # load data in database
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-
-            # insert patient data
-            cursor.execute("""
-            INSERT INTO Patients(age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal))
-            patient_id = cursor.lastrowid
-
-            # insert prediction result
-            cursor.execute("""
-            INSERT INTO Predictions (patient_id, prediction_result, confidence_score, timestamp )
-            VALUES(?, ?, ?, ?)
-
-            """, (patient_id, str(prediction), float(probability), datetime.datetime.now()))
-            conn.commit()
-
-            if prediction == 1:
-                result = "The patient is have heart disease."
+def _parse_form(form: Any) -> pd.DataFrame:
+    values: dict[str, int | float] = {}
+    for name in FEATURES:
+        raw = form.get(name, "").strip()
+        if not raw:
+            raise ValueError(f"Please provide a value for {name}.")
+        try:
+            if name == "oldpeak":
+                value = float(raw)
+                if not pd.notna(value) or not 0 <= value <= 10:
+                    raise ValueError("ST depression must be a number from 0 to 10.")
+                values[name] = value
             else:
-                result = "The patient is not have heart disease"
-            return render_template('index.html', result=result, probability=f"{probability:.2f}%")
-    except Exception as e:
-        # log error to the database
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-            INSERT INTO Errors(error_message, timestamp)
-            VALUES(?, ?)
-            """, (str(e), datetime.datetime.now()))
-            conn.commit()
-        print(f"Error: {str(e)}")
-        return render_template('index.html', result="Error in prediction. Kindly check your inputs.", probability="N/A")
+                value = int(raw)
+                minimum, maximum = INTEGER_FIELDS[name]
+                if not minimum <= value <= maximum:
+                    raise ValueError(f"{name} must be between {minimum} and {maximum}.")
+                values[name] = value
+        except (TypeError, OverflowError):
+            raise ValueError(f"Enter a valid number for {name}.") from None
+        except ValueError as exc:
+            if str(exc).startswith(("ST depression", f"{name} must be")):
+                raise
+            raise ValueError(f"Enter a valid number for {name}.") from None
+
+    return pd.DataFrame([values], columns=FEATURES)
 
 
-if __name__ == '__main__':
-    app.run(debug=True)
+def create_app(test_config: dict[str, Any] | None = None) -> Flask:
+    app = Flask(__name__, instance_relative_config=True)
+    environment = os.environ.get("APP_ENV", "development").lower()
+    secret_key = os.environ.get("SECRET_KEY")
+    if environment == "production" and not secret_key:
+        raise RuntimeError("Set a strong SECRET_KEY environment variable in production.")
 
+    app.config.from_mapping(
+        SECRET_KEY=secret_key or "local-development-only-change-me",
+        MAX_CONTENT_LENGTH=16 * 1024,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=environment == "production",
+        WTF_CSRF_TIME_LIMIT=3600,
+        TESTING=False,
+    )
+    if test_config:
+        app.config.update(test_config)
+
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+    csrf.init_app(app)
+
+    try:
+        model, scaler = _load_artifacts()
+    except RuntimeError:
+        app.logger.exception("Application startup failed while loading model artifacts")
+        raise
+    app.extensions["prediction_model"] = model
+    app.extensions["prediction_scaler"] = scaler
+
+    @app.after_request
+    def add_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self'; script-src 'self'; "
+            "img-src 'self' data:; form-action 'self'; base-uri 'self'; frame-ancestors 'none'",
+        )
+        response.headers.setdefault("Cache-Control", "no-store")
+        if environment == "production":
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        return response
+
+    @app.get("/")
+    def home():
+        return render_template("index.html")
+
+    @app.post("/prediction")
+    def predict():
+        try:
+            data = _parse_form(request.form)
+        except (ValueError, BadRequest) as exc:
+            return render_template("index.html", error=str(exc)), 400
+
+        try:
+            scaler = app.extensions["prediction_scaler"]
+            model = app.extensions["prediction_model"]
+            transformed = scaler.transform(data)
+            prediction = model.predict(transformed)[0]
+            classes = list(getattr(model, "classes_", []))
+            if not hasattr(model, "predict_proba") or 1 not in classes:
+                raise RuntimeError("Model must support probabilities and include positive class 1.")
+            probability = float(model.predict_proba(transformed)[0][classes.index(1)]) * 100
+            result = (
+                "The model estimates an elevated likelihood in this example."
+                if int(prediction) == 1
+                else "The model does not flag an elevated likelihood in this example."
+            )
+            return render_template(
+                "index.html", result=result, probability=f"{probability:.1f}%"
+            )
+        except Exception:
+            # Never log submitted form data: it may contain sensitive health information.
+            app.logger.exception("Prediction failed")
+            return render_template(
+                "index.html",
+                error="The prediction could not be completed. Please try again later.",
+            ), 503
+
+    @app.get("/health/live")
+    def health_live():
+        return {"status": "ok"}, 200
+
+    @app.get("/health/ready")
+    def health_ready():
+        ready = bool(
+            app.extensions.get("prediction_model")
+            and app.extensions.get("prediction_scaler")
+        )
+        return {"status": "ready" if ready else "not_ready"}, 200 if ready else 503
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(_error):
+        return render_template(
+            "index.html", error="Your form session expired. Reload the page and try again."
+        ), 400
+
+    @app.errorhandler(413)
+    def handle_payload_too_large(_error):
+        return {"error": "Request is too large."}, 413
+
+    return app
+
+
+app = create_app()
