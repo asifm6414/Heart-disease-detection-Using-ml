@@ -1,0 +1,16 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cardiolens
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: production
+      PORT: 8000
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      LOG_LEVEL: INFO
+      MODEL_PATH: trained_model.pkl
+      SCALER_PATH: scaler.pkl
+    restart: unless-stopped
