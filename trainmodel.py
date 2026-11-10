@@ -1,42 +1,134 @@
-import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import  LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+"""Train and evaluate a small set of educational baseline classifiers.
+
+This project is a demo only and not a clinical system.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
 import joblib
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    f1_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
-# Load dataset
-data = pd.read_excel('Heart_disease_cleveland_new.xlsx')
+ROOT = Path(__file__).resolve().parent
+DATA_PATH = Path(os.environ.get("DATA_PATH", ROOT / "Heart_disease_cleveland_new.xlsx"))
+FEATURES = (
+    "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg",
+    "thalach", "exang", "oldpeak", "slope", "ca", "thal",
+)
+RANDOM_STATE = 42
 
-# Features (X) and Target Variable (y)
-X = data.drop(columns=['target'])
-y = data['target']
 
-# Split into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+def atomic_joblib_dump(value, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+    try:
+        joblib.dump(value, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
-# Train Random Forest model
 
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+def main() -> None:
+    data = pd.read_excel(DATA_PATH)
+    missing = set((*FEATURES, "target")) - set(data.columns)
+    if missing:
+        raise ValueError(f"Dataset is missing required columns: {sorted(missing)}")
+    data = data.loc[:, [*FEATURES, "target"]].copy()
+    data[FEATURES] = data[FEATURES].apply(pd.to_numeric, errors="coerce")
+    data["target"] = pd.to_numeric(data["target"], errors="coerce")
+    data = data.dropna(subset=["target"])
+    if set(data["target"].unique()) != {0, 1}:
+        raise ValueError("Expected a binary target encoded as 0 and 1.")
+    X, y = data.loc[:, FEATURES], data["target"].astype(int)
+    counts = y.value_counts()
+    if counts.min() < 3:
+        raise ValueError("At least three observations per class are needed for stratified evaluation.")
 
-log_reg_model = LogisticRegression(max_iter=1000, random_state=42)
-log_reg_model.fit(X_train_scaled, y_train)
-# Save the trained model
-joblib.dump(scaler, 'scaler.pkl')
-joblib.dump(log_reg_model, 'trained_model.pkl')
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    )
+    folds = min(5, int(y_train.value_counts().min()))
+    cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_STATE)
 
-print("Model has been trained and saved successfully.")
+    candidates = {
+        "logistic_regression": LogisticRegression(max_iter=2000, class_weight="balanced", random_state=RANDOM_STATE),
+        "random_forest": RandomForestClassifier(
+            n_estimators=400, min_samples_leaf=2, class_weight="balanced", random_state=RANDOM_STATE, n_jobs=-1
+        ),
+        "support_vector_machine": SVC(C=1.0, probability=True, class_weight="balanced", random_state=RANDOM_STATE),
+    }
 
-y_pred = log_reg_model.predict(X_test_scaled)
+    scores = {}
+    for name, estimator in candidates.items():
+        pipeline = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("classifier", estimator),
+        ])
+        result = cross_validate(
+            pipeline, X_train, y_train, cv=cv,
+            scoring={"roc_auc": "roc_auc", "balanced_accuracy": "balanced_accuracy"},
+            n_jobs=1, error_score="raise",
+        )
+        scores[name] = {
+            "mean_cv_roc_auc": float(result["test_roc_auc"].mean()),
+            "std_cv_roc_auc": float(result["test_roc_auc"].std()),
+            "mean_cv_balanced_accuracy": float(result["test_balanced_accuracy"].mean()),
+        }
+        print(f"{name}: {scores[name]}")
 
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred, average = 'binary')
-recall = recall_score(y_test, y_pred, average='binary')
-f1 = f1_score(y_test, y_pred, average = 'binary')
+    best_name = max(scores, key=lambda key: scores[key]["mean_cv_roc_auc"])
+    final_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+        ("classifier", candidates[best_name]),
+    ])
+    final_pipeline.fit(X_train, y_train)
+    predictions = final_pipeline.predict(X_test)
+    probabilities = final_pipeline.predict_proba(X_test)[:, list(final_pipeline.classes_).index(1)]
 
-print(f"Accuracy: {accuracy:.2f}")
-print(f"Precision: {precision:.2f}")
-print(f"Recall: {recall:.2f}")
-print(f"F1 Score: {f1:.2f}")
+    test_metrics = {
+        "accuracy": float(accuracy_score(y_test, predictions)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
+        "f1": float(f1_score(y_test, predictions, zero_division=0)),
+        "roc_auc": float(roc_auc_score(y_test, probabilities)),
+        "classification_report": classification_report(y_test, predictions, zero_division=0, output_dict=True),
+    }
+
+    atomic_joblib_dump(final_pipeline.named_steps["classifier"], ROOT / "trained_model.pkl")
+    atomic_joblib_dump(final_pipeline.named_steps["scaler"], ROOT / "scaler.pkl")
+
+    metrics = {
+        "selected_model": best_name,
+        "selection_metric": "mean stratified CV ROC-AUC on training partition",
+        "cross_validation": scores,
+        "held_out_test": test_metrics,
+        "feature_order": list(FEATURES),
+        "warning": "Exploratory metrics only; not evidence of clinical validity or suitability for care.",
+    }
+    (ROOT / "model_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    print(f"Selected model: {best_name}")
+    print(f"Held-out metrics: {json.dumps({k: v for k, v in test_metrics.items() if k != 'classification_report'}, indent=2)}")
+    print("Artifacts saved. These scores are not clinical validation.")
+
+if __name__ == "__main__":
+    main()
